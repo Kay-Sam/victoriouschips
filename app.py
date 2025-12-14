@@ -5,16 +5,19 @@ import os
 import requests
 import hmac
 import hashlib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 app = Flask(__name__)
 CORS(app)
 
-# ---------------- KEYS ----------------
+# ---------------- KEYS / CONFIG ----------------
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
-SELLER_EMAIL = os.getenv("SELLER_EMAIL")
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-EMAIL_FROM = "Victorious Chips <onboarding@resend.dev>" 
+SELLER_EMAIL = os.getenv("SELLER_EMAIL")           # Real Gmail for seller
+SMTP_EMAIL = os.getenv("SMTP_EMAIL")               # Gmail to send emails from
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")         # Gmail App Password
 
 # ---------------- PROMO LOGIC ----------------
 def apply_promo(cart):
@@ -91,22 +94,19 @@ def verify_paystack_signature(req):
 
 # ---------------- EMAIL SENDER ----------------
 def send_email(to_emails, subject, html_content):
-    url = "https://api.resend.com/emails"
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "from": EMAIL_FROM,
-        "to": to_emails,
-        "subject": subject,
-        "html": html_content
-    }
-    response = requests.post(url, json=data, headers=headers)
-    if response.status_code in [200, 202]:
+    msg = MIMEMultipart()
+    msg['From'] = f"Victorious Chips <{SMTP_EMAIL}>"
+    msg['To'] = ", ".join(to_emails)
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html_content, 'html'))
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.sendmail(SMTP_EMAIL, to_emails, msg.as_string())
         return True
-    else:
-        print("Resend error:", response.status_code, response.text)
+    except Exception as e:
+        print("SMTP error:", e)
         return False
 
 # ---------------- SELLER & BUYER WEBHOOK ----------------
@@ -141,9 +141,9 @@ def webhook():
         <p><strong>Reference:</strong> {data['reference']}</p>
         """
 
-        # Send to seller
+        # Send email to seller
         send_email([SELLER_EMAIL], "📦 New Order Received", html)
-        # Send to buyer
+        # Send email to buyer
         send_email([customer.get("email")], "✅ Your Order Receipt", html)
 
         print("Emails sent to seller and buyer")
