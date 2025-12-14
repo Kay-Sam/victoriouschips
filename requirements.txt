@@ -1,6 +1,6 @@
 Flask
 gunicorn
 python-dotenv
-resend
 requests
+resend
 flask-cors
