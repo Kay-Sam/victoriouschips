@@ -5,7 +5,6 @@ import os
 import requests
 import hmac
 import hashlib
-import resend
 
 app = Flask(__name__)
 CORS(app)
@@ -14,7 +13,8 @@ CORS(app)
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
 SELLER_EMAIL = os.getenv("SELLER_EMAIL")
-resend.api_key = os.getenv("RESEND_API_KEY")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+EMAIL_FROM = "Victorious Chips <onboarding@resend.dev>" 
 
 # ---------------- PROMO LOGIC ----------------
 def apply_promo(cart):
@@ -30,7 +30,6 @@ def apply_promo(cart):
         promo = "15% Festive Promo"
 
     return int(total), promo
-
 
 # ---------------- PAYMENT ----------------
 @app.route("/create-payment", methods=["POST"])
@@ -79,7 +78,6 @@ def create_payment():
         "promo": promo
     })
 
-
 # ---------------- WEBHOOK SECURITY ----------------
 def verify_paystack_signature(req):
     signature = req.headers.get("x-paystack-signature")
@@ -91,8 +89,27 @@ def verify_paystack_signature(req):
     ).hexdigest()
     return hmac.compare_digest(computed, signature)
 
+# ---------------- EMAIL SENDER ----------------
+def send_email(to_emails, subject, html_content):
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "from": EMAIL_FROM,
+        "to": to_emails,
+        "subject": subject,
+        "html": html_content
+    }
+    response = requests.post(url, json=data, headers=headers)
+    if response.status_code in [200, 202]:
+        return True
+    else:
+        print("Resend error:", response.status_code, response.text)
+        return False
 
-# ---------------- SELLER WEBHOOK ----------------
+# ---------------- SELLER & BUYER WEBHOOK ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     if not verify_paystack_signature(request):
@@ -102,7 +119,6 @@ def webhook():
 
     if event.get("event") == "charge.success":
         data = event["data"]
-
         metadata = data.get("metadata", {})
         customer = metadata.get("customer", {})
         cart = metadata.get("cart", [])
@@ -122,20 +138,17 @@ def webhook():
         <p><strong>Promo:</strong> {promo or "None"}</p>
         <ul>{items}</ul>
         <p><strong>Total Paid:</strong> ₦{data['amount'] / 100}</p>
+        <p><strong>Reference:</strong> {data['reference']}</p>
         """
 
-        try:
-            resend.Emails.send({
-                "from": "Victorious Chips <onboarding@resend.dev>",
-                "to": SELLER_EMAIL,
-                "subject": "📦 New Order Received",
-                "html": html
-            })
-            print("Email sent to seller")
-        except Exception as e:
-            print("Resend failed:", e)
-    return jsonify({"status": "ok"}), 200
+        # Send to seller
+        send_email([SELLER_EMAIL], "📦 New Order Received", html)
+        # Send to buyer
+        send_email([customer.get("email")], "✅ Your Order Receipt", html)
 
+        print("Emails sent to seller and buyer")
+
+    return jsonify({"status": "ok"}), 200
 
 if __name__ == "__main__":
     app.run(debug=True)
