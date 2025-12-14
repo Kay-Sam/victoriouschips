@@ -124,13 +124,16 @@ def webhook():
         <p><strong>Total Paid:</strong> ₦{data['amount'] / 100}</p>
         """
 
-        resend.Emails.send({
-            "from": "Victorious Chips <onboarding@resend.dev>",
-            "to": SELLER_EMAIL,
-            "subject": "📦 New Order Received",
-            "html": html
-        })
-
+        try:
+            resend.Emails.send({
+                "from": "Victorious Chips <onboarding@resend.dev>",
+                "to": SELLER_EMAIL,
+                "subject": "📦 New Order Received",
+                "html": html
+            })
+            print("Email sent to seller")
+        except Exception as e:
+            print("Resend failed:", e)
     return jsonify({"status": "ok"}), 200
 
 
