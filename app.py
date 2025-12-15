@@ -1,13 +1,12 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, abort
 from flask_cors import CORS
 import uuid
 import os
 import requests
 import hmac
 import hashlib
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from urllib.parse import quote_plus
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
@@ -15,9 +14,11 @@ CORS(app)
 # ---------------- KEYS / CONFIG ----------------
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
-SELLER_EMAIL = os.getenv("SELLER_EMAIL")           # Real Gmail for seller
-SMTP_EMAIL = os.getenv("SMTP_EMAIL")               # Gmail to send emails from
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")         # Gmail App Password
+SELLER_WHATSAPP = os.getenv("SELLER_WHATSAPP")   # Seller WhatsApp number in international format, e.g., +2348012345678
+ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret") # Simple secret key for admin dashboard
+
+# Store latest orders in memory (reset on server restart)
+orders = []
 
 # ---------------- PROMO LOGIC ----------------
 def apply_promo(cart):
@@ -92,23 +93,6 @@ def verify_paystack_signature(req):
     ).hexdigest()
     return hmac.compare_digest(computed, signature)
 
-# ---------------- EMAIL SENDER ----------------
-def send_email(to_emails, subject, html_content):
-    msg = MIMEMultipart()
-    msg['From'] = f"Victorious Chips <{SMTP_EMAIL}>"
-    msg['To'] = ", ".join(to_emails)
-    msg['Subject'] = subject
-    msg.attach(MIMEText(html_content, 'html'))
-
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(SMTP_EMAIL, SMTP_PASSWORD)
-            server.sendmail(SMTP_EMAIL, to_emails, msg.as_string())
-        return True
-    except Exception as e:
-        print("SMTP error:", e)
-        return False
-
 # ---------------- SELLER & BUYER WEBHOOK ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -124,31 +108,57 @@ def webhook():
         cart = metadata.get("cart", [])
         promo = metadata.get("promo")
 
-        items = "".join(
-            f"<li>{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}</li>"
-            for item in cart
+        # Prepare order details for WhatsApp
+        items_text = "\n".join(f"{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}" for item in cart)
+        total_paid = f"₦{data['amount'] / 100}"
+        reference = data['reference']
+
+        message = (
+            f"🛒 *New Order Received*\n\n"
+            f"*Name:* {customer.get('name')}\n"
+            f"*Phone:* {customer.get('phone')}\n"
+            f"*Email:* {customer.get('email')}\n"
+            f"*Address:* {customer.get('address')}\n"
+            f"*Promo:* {promo or 'None'}\n"
+            f"*Items:*\n{items_text}\n"
+            f"*Total Paid:* {total_paid}\n"
+            f"*Reference:* {reference}"
         )
 
-        html = f"""
-        <h3>🛒 New Paid Order</h3>
-        <p><strong>Name:</strong> {customer.get('name')}</p>
-        <p><strong>Phone:</strong> {customer.get('phone')}</p>
-        <p><strong>Email:</strong> {customer.get('email')}</p>
-        <p><strong>Address:</strong> {customer.get('address')}</p>
-        <p><strong>Promo:</strong> {promo or "None"}</p>
-        <ul>{items}</ul>
-        <p><strong>Total Paid:</strong> ₦{data['amount'] / 100}</p>
-        <p><strong>Reference:</strong> {data['reference']}</p>
-        """
+        # Encode message for WhatsApp
+        wa_message = quote_plus(message)
+        seller_link = f"https://wa.me/{SELLER_WHATSAPP}?text={wa_message}"
 
-        # Send email to seller
-        send_email([SELLER_EMAIL], "📦 New Order Received", html)
-        # Send email to buyer
-        send_email([customer.get("email")], "✅ Your Order Receipt", html)
+        # Store order in memory
+        orders.append({
+            "customer": customer,
+            "cart": cart,
+            "promo": promo,
+            "total": total_paid,
+            "reference": reference,
+            "wa_link": seller_link,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
 
-        print("Emails sent to seller and buyer")
+        print("Order received, seller WhatsApp link:", seller_link)
 
     return jsonify({"status": "ok"}), 200
+
+# ---------------- ADMIN DASHBOARD ----------------
+@app.route("/admin")
+def admin_dashboard():
+    key = request.args.get("key")
+    if key != ADMIN_KEY:
+        abort(403)
+    return render_template("admin.html", orders=reversed(orders))  # show latest orders first
+
+# ---------------- PAYMENT SUCCESS ----------------
+@app.route("/payment-success/<reference>/<phone>")
+def payment_success(reference, phone):
+    # Redirect buyer to WhatsApp chat to confirm order
+    # Pre-fill message with reference and basic info
+    message = quote_plus(f"Hello, I just completed payment with reference: {reference}. My number: {phone}")
+    return render_template("payment-success.html", wa_link=f"https://wa.me/{SELLER_WHATSAPP}?text={message}")
 
 if __name__ == "__main__":
     app.run(debug=True)
