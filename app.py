@@ -162,12 +162,81 @@ def webhook():
     return jsonify({"status": "ok"}), 200
 
 # ---------------- ADMIN DASHBOARD ----------------
-@app.route("/admin")
+@app.route("/admin", methods=["GET", "POST"])
 def admin_dashboard():
     key = request.args.get("key")
     if key != ADMIN_KEY:
         abort(403)
-    return render_template("admin.html", orders=reversed(orders))  # show latest orders first
+
+    order = None
+    error = None
+
+    if request.method == "POST":
+        reference = request.form.get("reference", "").strip()
+
+        if not reference:
+            error = "Please enter a payment reference."
+            return render_template("admin.html", error=error)
+
+        # 🔎 Verify transaction with Paystack
+        res = requests.get(
+            f"https://api.paystack.co/transaction/verify/{reference}",
+            headers={
+                "Authorization": f"Bearer {PAYSTACK_SECRET}",
+                "Content-Type": "application/json"
+            }
+        )
+
+        if res.status_code != 200:
+            error = "Failed to connect to Paystack."
+            return render_template("admin.html", error=error)
+
+        response = res.json()
+        if not response.get("status"):
+            error = response.get("message", "Invalid payment reference.")
+            return render_template("admin.html", error=error)
+
+        data = response["data"]
+        metadata = data.get("metadata", {})
+
+        customer = metadata.get("customer")
+        cart = metadata.get("cart", [])
+        promo = metadata.get("promo")
+
+        if not customer or not cart:
+            error = "No order metadata found for this payment."
+            return render_template("admin.html", error=error)
+
+        # ✅ Ensure numeric values (fixes Jinja multiplication error)
+        for item in cart:
+            item["price"] = int(item.get("price", 0))
+            item["quantity"] = int(item.get("quantity", 1))
+
+        # 📞 Customer WhatsApp (remove + and spaces)
+        customer_phone = (
+            customer.get("phone", "")
+            .replace("+", "")
+            .replace(" ", "")
+        )
+
+        # 💬 WhatsApp message to CUSTOMER
+        wa_message = quote_plus(
+            f"Hello {customer.get('name')},\n"
+            f"We are confirming your order.\n\n"
+            f"Reference: {reference}"
+        )
+
+        order = {
+            "reference": reference,
+            "customer": customer,
+            "cart": cart,
+            "promo": promo,
+            "total": data["amount"] // 100,
+            "wa_link": f"https://wa.me/{customer_phone}?text={wa_message}"
+        }
+
+    return render_template("admin.html", order=order, error=error)
+
 
 # ---------------- PAYMENT SUCCESS ----------------
 @app.route("/payment-success/<reference>/<phone>")
@@ -185,26 +254,3 @@ if __name__ == "__main__":
     app.run(debug=True)
 
 
-import requests
-
-reference = "d0280326-2711-47c6-aaf5-71a8eef76c7e"
-
-res = requests.get(
-    f"https://api.paystack.co/transaction/verify/{reference}",
-    headers={
-        "Authorization": f"Bearer {PAYSTACK_SECRET}",
-        "Content-Type": "application/json"
-    }
-)
-
-data = res.json()
-
-metadata = data["data"]["metadata"]
-
-customer = metadata["customer"]
-cart = metadata["cart"]
-promo = metadata.get("promo")
-custom_fields = metadata.get("custom_fields")
-
-print(customer)
-print(cart)
