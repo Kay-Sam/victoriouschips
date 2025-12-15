@@ -50,15 +50,32 @@ def create_payment():
     reference = str(uuid.uuid4())
 
     payload = {
-        "email": customer["email"],
-        "amount": total * 100,
-        "reference": reference,
-        "metadata": {
-            "customer": customer,
-            "cart": cart,
-            "promo": promo
-        }
+    "email": customer["email"],
+    "amount": total * 100,
+    "reference": reference,
+    "metadata": {
+        "customer": customer,
+        "cart": cart,
+        "promo": promo,
+        "custom_fields": [
+            {
+                "display_name": "Customer Name",
+                "variable_name": "customer_name",
+                "value": customer["name"]
+            },
+            {
+                "display_name": "WhatsApp Number",
+                "variable_name": "whatsapp_number",
+                "value": customer["phone"]
+            },
+            {
+                "display_name": "Delivery Address",
+                "variable_name": "delivery_address",
+                "value": customer["address"]
+            }
+        ]
     }
+}
 
     headers = {
         "Authorization": f"Bearer {PAYSTACK_SECRET}",
@@ -155,10 +172,39 @@ def admin_dashboard():
 # ---------------- PAYMENT SUCCESS ----------------
 @app.route("/payment-success/<reference>/<phone>")
 def payment_success(reference, phone):
-    # Redirect buyer to WhatsApp chat to confirm order
-    # Pre-fill message with reference and basic info
-    message = quote_plus(f"Hello, I just completed payment with reference: {reference}. My number: {phone}")
-    return render_template("payment-success.html", wa_link=f"https://wa.me/{SELLER_WHATSAPP}?text={message}")
+    message = quote_plus(
+        f"Hello, I just completed payment.\n"
+        f"Reference: {reference}\n"
+        f"Phone: {phone}"
+    )
+    wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={message}"
+
+    return render_template("payment-success.html", wa_link=wa_link)
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+import requests
+
+reference = "d0280326-2711-47c6-aaf5-71a8eef76c7e"
+
+res = requests.get(
+    f"https://api.paystack.co/transaction/verify/{reference}",
+    headers={
+        "Authorization": f"Bearer {PAYSTACK_SECRET}",
+        "Content-Type": "application/json"
+    }
+)
+
+data = res.json()
+
+metadata = data["data"]["metadata"]
+
+customer = metadata["customer"]
+cart = metadata["cart"]
+promo = metadata.get("promo")
+custom_fields = metadata.get("custom_fields")
+
+print(customer)
+print(cart)
