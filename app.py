@@ -27,11 +27,11 @@ def apply_promo(cart):
     promo = None
 
     if total_qty >= 30:
-        total *= 0.8
-        promo = "20% Festive Promo"
-    elif total_qty >= 20:
         total *= 0.85
-        promo = "15% Festive Promo"
+        promo = "15% Special Offer Sale"
+    # elif total_qty >= 20:
+    #     total *= 0.85
+    #     promo = "15% Festive Promo"
 
     return int(total), promo
 
@@ -249,6 +249,11 @@ def payment_success(reference, phone):
     wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={message}"
 
     return render_template("payment-success.html", wa_link=wa_link)
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
 
 if __name__ == "__main__":
     app.run(debug=True)
