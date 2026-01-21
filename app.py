@@ -250,6 +250,9 @@ def payment_success(reference, phone):
 
     return render_template("payment-success.html", wa_link=wa_link)
 
+@app.route("/health")
+def health():
+    return "OK", 200
 
 
 if __name__ == "__main__":
