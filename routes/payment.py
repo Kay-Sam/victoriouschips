@@ -15,13 +15,34 @@ def create_payment():
     customer = data["customer"]
 
     reference = str(uuid.uuid4())
-
-    # Calculate total from cart
     total_amount = sum(item["price"] * item["quantity"] for item in cart)
 
+    # 1️⃣ Save order immediately with status "pending"
+    order = Order(
+        order_id=Order.generate_order_id(),
+        reference=reference,
+        name=customer["name"],
+        phone=customer["phone"],
+        email=customer["email"],
+        address=customer["address"],
+        total=total_amount,
+        status="pending"  # <--- track payment status
+    )
+    db.session.add(order)
+    db.session.flush()
+    for item in cart:
+        db.session.add(OrderItem(
+            order_id=order.id,
+            name=item["name"],
+            price=item["price"],
+            quantity=item["quantity"]
+        ))
+    db.session.commit()
+
+    # 2️⃣ Initialize payment with Paystack
     payload = {
         "email": customer["email"],
-        "amount": total_amount * 100,  # Paystack needs kobo
+        "amount": total_amount * 100,  # in kobo
         "reference": reference,
         "metadata": {
             "customer": customer,
@@ -32,12 +53,9 @@ def create_payment():
     res = requests.post(
         "https://api.paystack.co/transaction/initialize",
         json=payload,
-        headers={
-            "Authorization": f"Bearer {Config.PAYSTACK_SECRET}"
-        }
+        headers={"Authorization": f"Bearer {Config.PAYSTACK_SECRET}"}
     )
 
-    # Optional: check if Paystack returned an error
     if res.status_code != 200:
         return jsonify({"error": "Payment initialization failed"}), 400
 
@@ -47,6 +65,21 @@ def create_payment():
         "amount": total_amount * 100,
         "email": customer["email"]
     })
+
+@payment_bp.route("/webhook", methods=["POST"])
+def webhook():
+    if not verify_signature(request):
+        return "Invalid", 400
+
+    event = request.json
+    if event["event"] == "charge.success":
+        data = event["data"]
+        order = Order.query.filter_by(reference=data["reference"]).first()
+        if order:
+            order.status = "paid"  # <-- update status
+            db.session.commit()
+
+    return "OK", 200
 
 
 def verify_signature(req):

@@ -20,3 +20,9 @@ def track_order():
             for i in order.items
         ]
     })
+    
+@shop_bp.route("/my-orders")
+def my_orders():
+    user_phone = request.args.get("phone")  # Or from logged-in user session
+    orders = Order.query.filter_by(phone=user_phone).order_by(Order.id.desc()).all()
+    return render_template("my_orders.html", orders=orders)
