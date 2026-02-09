@@ -1,6 +1,7 @@
 # routes/shop.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, render_template, request, jsonify
 from models import Order
+    
 
 shop_bp = Blueprint("shop", __name__)
 
