@@ -18,11 +18,10 @@ def verify_signature(req):
     ).hexdigest()
     return hmac.compare_digest(signature, computed)
 
-# ---------------- Create Payment ----------------
 @payment_bp.route("/create-payment", methods=["POST"])
 def create_payment():
     try:
-        data = request.json
+        data = request.get_json(force=True)
         cart = data.get("cart", [])
         customer = data.get("customer", {})
     except Exception as e:
@@ -34,7 +33,7 @@ def create_payment():
     reference = str(uuid.uuid4())
     total_amount = sum(item.get("price", 0) * item.get("quantity", 1) for item in cart)
 
-    # Save order immediately with status "pending"
+    # Save order in DB
     try:
         order = Order(
             order_id=Order.generate_order_id(),
@@ -63,7 +62,7 @@ def create_payment():
     # Initialize Paystack payment
     payload = {
         "email": customer.get("email"),
-        "amount": total_amount * 100,  # in kobo
+        "amount": total_amount * 100,
         "reference": reference,
         "metadata": {
             "customer": customer,
@@ -77,21 +76,24 @@ def create_payment():
             json=payload,
             headers={"Authorization": f"Bearer {Config.PAYSTACK_SECRET}"}
         )
-        paystack_data = res.json()
+        # Always try JSON, fallback to error string
+        try:
+            paystack_data = res.json()
+        except Exception:
+            return jsonify({"error": "Paystack returned invalid response", "details": res.text}), 500
     except Exception as e:
         return jsonify({"error": "Failed to connect to Paystack", "details": str(e)}), 500
 
     if not paystack_data.get("status"):
         return jsonify({"error": paystack_data.get("message", "Payment initialization failed")}), 400
 
-    # Return JSON for frontend
+    # Success
     return jsonify({
         "reference": reference,
         "public_key": Config.PAYSTACK_PUBLIC,
         "amount": total_amount * 100,
         "email": customer.get("email")
     })
-
 
 # ---------------- Webhook ----------------
 @payment_bp.route("/webhook", methods=["POST"])
@@ -118,14 +120,3 @@ def payment_success(reference, phone):
     if not order:
         return "Order not found", 404
     return render_template("payment-success.html", order=order)
-
-
-def verify_signature(req):
-    signature = req.headers.get("x-paystack-signature")
-    computed = hmac.new(
-        Config.PAYSTACK_SECRET.encode(),
-        req.data,
-        hashlib.sha512
-    ).hexdigest()
-    return hmac.compare_digest(signature, computed)
-
