@@ -1,35 +1,12 @@
-# models.py
-from flask_sqlalchemy import SQLAlchemy
+# Placeholder for future database usage
+
 from datetime import datetime
-import uuid
 
-db = SQLAlchemy()
-
-class Order(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.String(40), unique=True, nullable=False)
-    reference = db.Column(db.String(100), unique=True, nullable=False)
-
-    name = db.Column(db.String(120))
-    phone = db.Column(db.String(50))
-    email = db.Column(db.String(120))
-    address = db.Column(db.Text)
-
-    promo = db.Column(db.String(120))
-    total = db.Column(db.Integer)
-    status = db.Column(db.String(30), default="Paid")
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    items = db.relationship("OrderItem", backref="order", lazy=True)
-
-    @staticmethod
-    def generate_order_id():
-        return f"VC-{uuid.uuid4().hex[:8].upper()}"
-
-class OrderItem(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.Integer, db.ForeignKey("order.id"))
-    name = db.Column(db.String(120))
-    price = db.Column(db.Integer)
-    quantity = db.Column(db.Integer)
+class Order:
+    def __init__(self, reference, customer, cart, total, promo=None):
+        self.reference = reference
+        self.customer = customer
+        self.cart = cart
+        self.total = total
+        self.promo = promo
+        self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

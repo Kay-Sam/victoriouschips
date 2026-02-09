@@ -13,6 +13,9 @@ def admin():
     orders = Order.query.order_by(Order.created_at.desc()).all()
     return render_template("admin.html", orders=orders)
 
+
+
 @admin_bp.route("/db-test")
 def db_test():
     return str(Order.query.count())
+
