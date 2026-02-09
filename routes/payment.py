@@ -92,44 +92,6 @@ def verify_signature(req):
     return hmac.compare_digest(signature, computed)
 
 
-@payment_bp.route("/webhook", methods=["POST"])
-def webhook():
-    if not verify_signature(request):
-        return "Invalid", 400
-
-    event = request.json
-
-    if event["event"] == "charge.success":
-        data = event["data"]
-        meta = data["metadata"]
-        customer = meta["customer"]
-        cart = meta["cart"]
-
-        order = Order(
-            order_id=Order.generate_order_id(),
-            reference=data["reference"],
-            name=customer["name"],
-            phone=customer["phone"],
-            email=customer["email"],
-            address=customer["address"],
-            total=data["amount"] // 100
-        )
-
-        db.session.add(order)
-        db.session.flush()
-
-        for item in cart:
-            db.session.add(OrderItem(
-                order_id=order.id,
-                name=item["name"],
-                price=item["price"],
-                quantity=item["quantity"]
-            ))
-
-        db.session.commit()
-
-    return "OK", 200
-
 @payment_bp.route("/payment-success/<reference>/<phone>")
 def payment_success(reference, phone):
     # Find the order by reference
