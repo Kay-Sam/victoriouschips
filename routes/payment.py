@@ -1,5 +1,5 @@
 # routes/payment.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify,render_template
 from models import db, Order, OrderItem
 from config import Config
 import uuid
@@ -96,3 +96,13 @@ def webhook():
         db.session.commit()
 
     return "OK", 200
+
+@payment_bp.route("/payment-success/<reference>/<phone>")
+def payment_success(reference, phone):
+    # Find the order by reference
+    order = Order.query.filter_by(reference=reference, phone=phone).first()
+    if not order:
+        return "Order not found", 404
+
+    # You can render a success template and pass order details
+    return render_template("payment-success.html", order=order)
