@@ -16,9 +16,12 @@ def create_payment():
 
     reference = str(uuid.uuid4())
 
+    # Calculate total from cart
+    total_amount = sum(item["price"] * item["quantity"] for item in cart)
+
     payload = {
         "email": customer["email"],
-        "amount": data["total"] * 100,
+        "amount": total_amount * 100,  # Paystack needs kobo
         "reference": reference,
         "metadata": {
             "customer": customer,
@@ -34,9 +37,15 @@ def create_payment():
         }
     )
 
+    # Optional: check if Paystack returned an error
+    if res.status_code != 200:
+        return jsonify({"error": "Payment initialization failed"}), 400
+
     return jsonify({
         "reference": reference,
-        "public_key": Config.PAYSTACK_PUBLIC
+        "public_key": Config.PAYSTACK_PUBLIC,
+        "amount": total_amount * 100,
+        "email": customer["email"]
     })
 
 
