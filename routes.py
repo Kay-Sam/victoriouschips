@@ -147,12 +147,31 @@ Total Paid: ₦{total}
 
 
 def payment_success(reference):
-    # Find order
     order = next((o for o in ORDERS if o["reference"] == reference), None)
-    if not order:
-        abort(404)
-    return render_template("payment-success.html", order=order)
 
+    # If webhook not yet received, verify from Paystack
+    if not order:
+        res = requests.get(
+            f"https://api.paystack.co/transaction/verify/{reference}",
+            headers={"Authorization": f"Bearer {Config.PAYSTACK_SECRET}"}
+        )
+
+        if res.status_code != 200 or not res.json().get("status"):
+            abort(404)
+
+        data = res.json()["data"]
+        meta = data.get("metadata", {})
+
+        order = {
+            "reference": reference,
+            "customer": meta.get("customer", {}),
+            "cart": meta.get("cart", []),
+            "promo": meta.get("promo"),
+            "total": data["amount"] // 100,
+            "wa_link": f"https://wa.me/{Config.SELLER_WHATSAPP}"
+        }
+
+    return render_template("payment-success.html", order=order)
 
 def my_orders():
     return render_template("my_orders.html")
