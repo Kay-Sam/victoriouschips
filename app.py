@@ -1,7 +1,10 @@
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import os
 from flask import Flask, request, jsonify, render_template, abort
 from flask_cors import CORS
 import uuid
-import os
 import requests
 import hmac
 import hashlib
@@ -17,8 +20,28 @@ PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
 SELLER_WHATSAPP = os.getenv("SELLER_WHATSAPP")   # Seller WhatsApp number in international format, e.g., +2348012345678
 ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret") # Simple secret key for admin dashboard
 
-# Store latest orders in memory (reset on server restart)
-orders = []
+# ---------------- SMTP CONFIG ----------------
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_FROM = "Victorious Chips <admin@victoriouschips.com.ng>"
+SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+
+# ---------------- HELPER FUNCTION ----------------
+def send_email(to_email, subject, body):
+    msg = MIMEMultipart()
+    msg['From'] = SMTP_FROM
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'html'))  # HTML format for better styling
+
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+
+# ---------------- ORDERS ----------------
+orders = []  # Store latest orders in memory
 
 # ---------------- PROMO LOGIC ----------------
 def apply_promo(cart):
@@ -29,10 +52,6 @@ def apply_promo(cart):
     if total_qty >= 30:
         total *= 0.85
         promo = "15% Special Offer Sale"
-    # elif total_qty >= 20:
-    #     total *= 0.85
-    #     promo = "15% Festive Promo"
-
     return int(total), promo
 
 # ---------------- PAYMENT ----------------
@@ -50,32 +69,20 @@ def create_payment():
     reference = str(uuid.uuid4())
 
     payload = {
-    "email": customer["email"],
-    "amount": total * 100,
-    "reference": reference,
-    "metadata": {
-        "customer": customer,
-        "cart": cart,
-        "promo": promo,
-        "custom_fields": [
-            {
-                "display_name": "Customer Name",
-                "variable_name": "customer_name",
-                "value": customer["name"]
-            },
-            {
-                "display_name": "WhatsApp Number",
-                "variable_name": "whatsapp_number",
-                "value": customer["phone"]
-            },
-            {
-                "display_name": "Delivery Address",
-                "variable_name": "delivery_address",
-                "value": customer["address"]
-            }
-        ]
+        "email": customer["email"],
+        "amount": total * 100,
+        "reference": reference,
+        "metadata": {
+            "customer": customer,
+            "cart": cart,
+            "promo": promo,
+            "custom_fields": [
+                {"display_name": "Customer Name", "variable_name": "customer_name", "value": customer["name"]},
+                {"display_name": "WhatsApp Number", "variable_name": "whatsapp_number", "value": customer["phone"]},
+                {"display_name": "Delivery Address", "variable_name": "delivery_address", "value": customer["address"]}
+            ]
+        }
     }
-}
 
     headers = {
         "Authorization": f"Bearer {PAYSTACK_SECRET}",
@@ -103,11 +110,7 @@ def create_payment():
 def verify_paystack_signature(req):
     signature = req.headers.get("x-paystack-signature")
     body = req.data
-    computed = hmac.new(
-        PAYSTACK_SECRET.encode(),
-        body,
-        hashlib.sha512
-    ).hexdigest()
+    computed = hmac.new(PAYSTACK_SECRET.encode(), body, hashlib.sha512).hexdigest()
     return hmac.compare_digest(computed, signature)
 
 # ---------------- SELLER & BUYER WEBHOOK ----------------
@@ -117,20 +120,18 @@ def webhook():
         return jsonify({"error": "Invalid signature"}), 400
 
     event = request.json
-
     if event.get("event") == "charge.success":
         data = event["data"]
         metadata = data.get("metadata", {})
         customer = metadata.get("customer", {})
         cart = metadata.get("cart", [])
         promo = metadata.get("promo")
-
-        # Prepare order details for WhatsApp
-        items_text = "\n".join(f"{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}" for item in cart)
-        total_paid = f"₦{data['amount'] / 100}"
         reference = data['reference']
+        total_paid = f"₦{data['amount'] / 100}"
 
-        message = (
+        # ---------------- WhatsApp message ----------------
+        items_text = "\n".join(f"{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}" for item in cart)
+        wa_message = (
             f"🛒 *New Order Received*\n\n"
             f"*Name:* {customer.get('name')}\n"
             f"*Phone:* {customer.get('phone')}\n"
@@ -141,12 +142,26 @@ def webhook():
             f"*Total Paid:* {total_paid}\n"
             f"*Reference:* {reference}"
         )
+        seller_link = f"https://wa.me/{SELLER_WHATSAPP}?text={quote_plus(wa_message)}"
 
-        # Encode message for WhatsApp
-        wa_message = quote_plus(message)
-        seller_link = f"https://wa.me/{SELLER_WHATSAPP}?text={wa_message}"
+        # ---------------- Email ----------------
+        items_html = "".join(f"<li>{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}</li>" for item in cart)
+        html_body = f"""
+        <h2>Order Confirmation</h2>
+        <p><strong>Name:</strong> {customer.get('name')}</p>
+        <p><strong>Phone:</strong> {customer.get('phone')}</p>
+        <p><strong>Email:</strong> {customer.get('email')}</p>
+        <p><strong>Address:</strong> {customer.get('address')}</p>
+        <p><strong>Promo:</strong> {promo or 'None'}</p>
+        <p><strong>Reference:</strong> {reference}</p>
+        <ul>{items_html}</ul>
+        <p><strong>Total Paid:</strong> {total_paid}</p>
+        """
+        # Send emails
+        send_email(customer.get("email"), f"Your Order Confirmation — Ref {reference}", html_body)
+        send_email("vicaderonkedada@gmail.com", f"New Order Received — Ref {reference}", html_body)
 
-        # Store order in memory
+        # ---------------- Store order ----------------
         orders.append({
             "customer": customer,
             "cart": cart,
@@ -173,18 +188,14 @@ def admin_dashboard():
 
     if request.method == "POST":
         reference = request.form.get("reference", "").strip()
-
         if not reference:
             error = "Please enter a payment reference."
             return render_template("admin.html", error=error)
 
-        # 🔎 Verify transaction with Paystack
+        # Verify transaction with Paystack
         res = requests.get(
             f"https://api.paystack.co/transaction/verify/{reference}",
-            headers={
-                "Authorization": f"Bearer {PAYSTACK_SECRET}",
-                "Content-Type": "application/json"
-            }
+            headers={"Authorization": f"Bearer {PAYSTACK_SECRET}", "Content-Type": "application/json"}
         )
 
         if res.status_code != 200:
@@ -198,7 +209,6 @@ def admin_dashboard():
 
         data = response["data"]
         metadata = data.get("metadata", {})
-
         customer = metadata.get("customer")
         cart = metadata.get("cart", [])
         promo = metadata.get("promo")
@@ -207,24 +217,12 @@ def admin_dashboard():
             error = "No order metadata found for this payment."
             return render_template("admin.html", error=error)
 
-        # ✅ Ensure numeric values (fixes Jinja multiplication error)
         for item in cart:
             item["price"] = int(item.get("price", 0))
             item["quantity"] = int(item.get("quantity", 1))
 
-        # 📞 Customer WhatsApp (remove + and spaces)
-        customer_phone = (
-            customer.get("phone", "")
-            .replace("+", "")
-            .replace(" ", "")
-        )
-
-        # 💬 WhatsApp message to CUSTOMER
-        wa_message = quote_plus(
-            f"Hello {customer.get('name')},\n"
-            f"We are confirming your order.\n\n"
-            f"Reference: {reference}"
-        )
+        customer_phone = customer.get("phone", "").replace("+", "").replace(" ", "")
+        wa_message = quote_plus(f"Hello {customer.get('name')},\nWe are confirming your order.\n\nReference: {reference}")
 
         order = {
             "reference": reference,
@@ -237,30 +235,29 @@ def admin_dashboard():
 
     return render_template("admin.html", order=order, error=error)
 
-
 # ---------------- PAYMENT SUCCESS ----------------
 @app.route("/payment-success/<reference>/<phone>")
 def payment_success(reference, phone):
-    message = quote_plus(
-        f"Hello, I just completed payment.\n"
-        f"Reference: {reference}\n"
-        f"Phone: {phone}"
-    )
+    message = quote_plus(f"Hello, I just completed payment.\nReference: {reference}\nPhone: {phone}")
     wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={message}"
+    return render_template("payment-success.html", wa_link=wa_link , reference=reference)
 
-    return render_template("payment-success.html", wa_link=wa_link)
+@app.route("/fetch-order/<ref>")
+def fetch_order(ref):
+    # Look in memory orders
+    order = next((o for o in orders if o["reference"] == ref), None)
+    if not order:
+        return jsonify({"error": "Order not found"}), 404
+    return jsonify(order)
+
 
 @app.route("/my-orders")
 def my_orders():
     return render_template("my_orders.html")
 
-
 @app.route("/health")
 def health():
     return "OK", 200
 
-
 if __name__ == "__main__":
     app.run(debug=True)
-
-
