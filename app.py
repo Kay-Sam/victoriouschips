@@ -17,8 +17,8 @@ CORS(app)
 # ---------------- KEYS / CONFIG ----------------
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
-SELLER_WHATSAPP = os.getenv("SELLER_WHATSAPP")   # Seller WhatsApp number in international format, e.g., +2348012345678
-ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret") # Simple secret key for admin dashboard
+SELLER_WHATSAPP = os.getenv("SELLER_WHATSAPP") 
+ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret") 
 
 # ---------------- SMTP CONFIG ----------------
 SMTP_SERVER = "smtp.gmail.com"
@@ -29,16 +29,22 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ---------------- HELPER FUNCTION ----------------
 def send_email(to_email, subject, body):
-    msg = MIMEMultipart()
-    msg['From'] = SMTP_FROM
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'html'))  # HTML format for better styling
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_FROM
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
 
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+
+        print(f"✅ Email sent successfully to {to_email}")
+
+    except Exception as e:
+        print("❌ EMAIL ERROR:", str(e))
 
 # ---------------- ORDERS ----------------
 orders = []  # Store latest orders in memory
@@ -208,6 +214,15 @@ def admin_dashboard():
             return render_template("admin.html", error=error)
 
         data = response["data"]
+#paid_at = data.get("paid_at", "N/A")
+        paid_at = data.get("paid_at")
+
+        if paid_at:
+            formatted_time = datetime.fromisoformat(
+                paid_at.replace("Z", "+00:00")
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            formatted_time = "N/A"
         metadata = data.get("metadata", {})
         customer = metadata.get("customer")
         cart = metadata.get("cart", [])
@@ -230,6 +245,7 @@ def admin_dashboard():
             "cart": cart,
             "promo": promo,
             "total": data["amount"] // 100,
+            "timestamp": formatted_time,   
             "wa_link": f"https://wa.me/{customer_phone}?text={wa_message}"
         }
 
@@ -242,18 +258,47 @@ def payment_success(reference, phone):
     wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={message}"
     return render_template("payment-success.html", wa_link=wa_link , reference=reference)
 
-@app.route("/fetch-order/<ref>")
-def fetch_order(ref):
-    # Look in memory orders
-    order = next((o for o in orders if o["reference"] == ref), None)
-    if not order:
-        return jsonify({"error": "Order not found"}), 404
-    return jsonify(order)
-
-
-@app.route("/my-orders")
+@app.route("/my-orders", methods=["GET", "POST"])
 def my_orders():
-    return render_template("my_orders.html")
+    order = None
+    error = None
+
+    if request.method == "POST":
+        reference = request.form.get("reference")
+
+        headers = {
+            "Authorization": f"Bearer {PAYSTACK_SECRET}"
+        }
+
+        res = requests.get(
+            f"https://api.paystack.co/transaction/verify/{reference}",
+            headers=headers
+        )
+
+        data = res.json()
+
+        if not data.get("status"):
+            error = "Order not found or invalid reference."
+        else:
+            tx = data["data"]
+            metadata = tx.get("metadata", {})
+
+            order = {
+                "reference": reference,
+                "customer": metadata.get("customer", {}),
+                "cart": metadata.get("cart", []),
+                "promo": metadata.get("promo"),
+                "total": tx["amount"] // 100,
+                "timestamp": tx.get("paid_at")
+            }
+
+    return render_template(
+    "my_orders.html",
+    order=order,
+    error=error,
+    SELLER_WHATSAPP=SELLER_WHATSAPP
+)
+
 
 @app.route("/health")
 def health():
