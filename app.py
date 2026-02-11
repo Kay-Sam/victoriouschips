@@ -283,21 +283,35 @@ def my_orders():
             tx = data["data"]
             metadata = tx.get("metadata", {})
 
+            # Ensure price and quantity are integers
+            cart = metadata.get("cart", [])
+            for item in cart:
+                item["price"] = int(item.get("price", 0))
+                item["quantity"] = int(item.get("quantity", 1))
+
+            # Format timestamp
+            paid_at = tx.get("paid_at")
+            if paid_at:
+                from datetime import datetime
+                timestamp = datetime.fromisoformat(paid_at.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                timestamp = "N/A"
+
             order = {
                 "reference": reference,
                 "customer": metadata.get("customer", {}),
-                "cart": metadata.get("cart", []),
+                "cart": cart,
                 "promo": metadata.get("promo"),
                 "total": tx["amount"] // 100,
-                "timestamp": tx.get("paid_at")
+                "timestamp": timestamp
             }
 
     return render_template(
-    "my_orders.html",
-    order=order,
-    error=error,
-    SELLER_WHATSAPP=SELLER_WHATSAPP
-)
+        "my_orders.html",
+        order=order,
+        error=error,
+        SELLER_WHATSAPP=SELLER_WHATSAPP
+    )
 
 
 @app.route("/health")
