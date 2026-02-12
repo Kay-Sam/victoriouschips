@@ -9,7 +9,7 @@ import requests
 import hmac
 import hashlib
 from urllib.parse import quote_plus
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import resend
 
 app = Flask(__name__)
@@ -22,18 +22,19 @@ PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
 SELLER_WHATSAPP = os.getenv("SELLER_WHATSAPP") 
 ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret") 
 resend.api_key = os.getenv("RESEND_API_KEY")
+#resend.Domains.verify(domain_id="bbd54652-d429-45f4-bdb4-fbbb6dd181f0")
 
 # ---------------- SMTP CONFIG ----------------
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SMTP_FROM = "Victorious Chips <vicaderonkedada@gmail.com>"
-SMTP_USERNAME = os.getenv("SMTP_USERNAME")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
+# SMTP_SERVER = "smtp.gmail.com"
+# SMTP_PORT = 587
+# SMTP_FROM = "Victorious Chips <vicaderonkedada@gmail.com>"
+# SMTP_USERNAME = os.getenv("SMTP_USERNAME")
+# SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ---------------- HELPER FUNCTION ----------------
 def send_email(to_email, subject, html_body):
     resend.Emails.send({
-        "from": "Victorious Chips <onboarding@resend.dev>",
+        "from": "Victorious Chips <orders@victoriouschips.com.ng>",
         "to": [to_email],
         "subject": subject,
         "html": html_body,
@@ -199,6 +200,7 @@ def webhook():
             print("Email sending failed:", str(e))
 
         # ---------------- Store Order ----------------
+        NIGERIA_TZ = timezone(timedelta(hours=1))
         orders.append({
             "customer": customer,
             "cart": cart,
@@ -206,7 +208,7 @@ def webhook():
             "total": total_paid,
             "reference": reference,
             "wa_link": seller_link,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": datetime.now(NIGERIA_TZ).strftime("%d-%Y-%m- %H:%M:%S")
         })
 
         print("✅ Order processed:", reference)
@@ -249,9 +251,10 @@ def admin_dashboard():
         paid_at = data.get("paid_at")
 
         if paid_at:
-            formatted_time = datetime.fromisoformat(
-                paid_at.replace("Z", "+00:00")
-            ).strftime("%Y-%m-%d %H:%M:%S")
+            dt_utc = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
+            dt_nigeria = dt_utc + timedelta(hours=1)
+            formatted_time = dt_nigeria.strftime("%Y-%m-%d %H:%M:%S")
+
         else:
             formatted_time = "N/A"
         metadata = data.get("metadata", {})
@@ -388,8 +391,11 @@ def my_orders():
             # Format timestamp
             paid_at = tx.get("paid_at")
             if paid_at:
-                from datetime import datetime
-                timestamp = datetime.fromisoformat(paid_at.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M:%S")
+
+                dt_utc = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
+                dt_nigeria = dt_utc + timedelta(hours=1)
+                timestamp = dt_nigeria.strftime("%Y-%m-%d %H:%M:%S")
+
             else:
                 timestamp = "N/A"
 
@@ -417,7 +423,7 @@ def health():
 @app.route("/test-email")
 def test_email():
     try:
-        send_email("vicaderonkedada@gmail.com", "Test Email", "<h1>Hello World!</h1>")
+        send_email("kayodesamuel2588@gmail.com", "Test Email", "<h1>Hello World!</h1>")
         return "Email sent!"
     except Exception as e:
         return f"Error: {e}"
