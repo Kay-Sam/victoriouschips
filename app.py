@@ -10,15 +10,18 @@ import hmac
 import hashlib
 from urllib.parse import quote_plus
 from datetime import datetime
+import resend
 
 app = Flask(__name__)
 CORS(app)
+
 
 # ---------------- KEYS / CONFIG ----------------
 PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
 PAYSTACK_PUBLIC = os.getenv("PAYSTACK_PUBLIC_KEY")
 SELLER_WHATSAPP = os.getenv("SELLER_WHATSAPP") 
 ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret") 
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 # ---------------- SMTP CONFIG ----------------
 SMTP_SERVER = "smtp.gmail.com"
@@ -28,23 +31,13 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # ---------------- HELPER FUNCTION ----------------
-def send_email(to_email, subject, body):
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_FROM
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'html'))
-
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.send_message(msg)
-
-        print(f"✅ Email sent successfully to {to_email}")
-
-    except Exception as e:
-        print("❌ EMAIL ERROR:", str(e))
+def send_email(to_email, subject, html_body):
+    resend.Emails.send({
+        "from": "Victorious Chips <onboarding@resend.dev>",
+        "to": [to_email],
+        "subject": subject,
+        "html": html_body,
+    })
 
 # ---------------- ORDERS ----------------
 orders = []  # Store latest orders in memory
@@ -126,48 +119,86 @@ def webhook():
         return jsonify({"error": "Invalid signature"}), 400
 
     event = request.json
+
     if event.get("event") == "charge.success":
         data = event["data"]
+        reference = data.get("reference")
+
+        # 🔒 Prevent duplicate processing
+        if any(order["reference"] == reference for order in orders):
+            return jsonify({"status": "already_processed"}), 200
+
         metadata = data.get("metadata", {})
         customer = metadata.get("customer", {})
         cart = metadata.get("cart", [])
         promo = metadata.get("promo")
-        reference = data['reference']
-        total_paid = f"₦{data['amount'] / 100}"
 
-        # ---------------- WhatsApp message ----------------
-        items_text = "\n".join(f"{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}" for item in cart)
+        # ✅ Use Paystack verified amount
+        total_paid = f"₦{data['amount'] / 100:,.2f}"
+
+        # ---------------- Normalize Cart Safely ----------------
+        items_list = []
+        items_html_list = []
+
+        for item in cart:
+            name = item.get("name", "Item")
+            price = int(item.get("price", 0))
+            quantity = int(item.get("quantity", 1))
+
+            subtotal = price * quantity
+
+            items_list.append(f"{name} × {quantity} — ₦{subtotal:,}")
+            items_html_list.append(f"<li>{name} × {quantity} — ₦{subtotal:,}</li>")
+
+        items_text = "\n".join(items_list)
+        items_html = "".join(items_html_list)
+
+        # ---------------- WhatsApp Message ----------------
         wa_message = (
             f"🛒 *New Order Received*\n\n"
-            f"*Name:* {customer.get('name')}\n"
-            f"*Phone:* {customer.get('phone')}\n"
-            f"*Email:* {customer.get('email')}\n"
-            f"*Address:* {customer.get('address')}\n"
+            f"*Name:* {customer.get('name', 'N/A')}\n"
+            f"*Phone:* {customer.get('phone', 'N/A')}\n"
+            f"*Email:* {customer.get('email', 'N/A')}\n"
+            f"*Address:* {customer.get('address', 'N/A')}\n"
             f"*Promo:* {promo or 'None'}\n"
-            f"*Items:*\n{items_text}\n"
+            f"*Items:*\n{items_text}\n\n"
             f"*Total Paid:* {total_paid}\n"
             f"*Reference:* {reference}"
         )
+
         seller_link = f"https://wa.me/{SELLER_WHATSAPP}?text={quote_plus(wa_message)}"
 
-        # ---------------- Email ----------------
-        items_html = "".join(f"<li>{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}</li>" for item in cart)
+        # ---------------- Email Body ----------------
         html_body = f"""
         <h2>Order Confirmation</h2>
-        <p><strong>Name:</strong> {customer.get('name')}</p>
-        <p><strong>Phone:</strong> {customer.get('phone')}</p>
-        <p><strong>Email:</strong> {customer.get('email')}</p>
-        <p><strong>Address:</strong> {customer.get('address')}</p>
+        <p><strong>Name:</strong> {customer.get('name', 'N/A')}</p>
+        <p><strong>Phone:</strong> {customer.get('phone', 'N/A')}</p>
+        <p><strong>Email:</strong> {customer.get('email', 'N/A')}</p>
+        <p><strong>Address:</strong> {customer.get('address', 'N/A')}</p>
         <p><strong>Promo:</strong> {promo or 'None'}</p>
         <p><strong>Reference:</strong> {reference}</p>
         <ul>{items_html}</ul>
         <p><strong>Total Paid:</strong> {total_paid}</p>
         """
-        # Send emails
-        send_email(customer.get("email"), f"Your Order Confirmation — Ref {reference}", html_body)
-        send_email("vicaderonkedada@gmail.com", f"New Order Received — Ref {reference}", html_body)
 
-        # ---------------- Store order ----------------
+        # ---------------- Send Emails ----------------
+        try:
+            send_email(
+                customer.get("email"),
+                f"Your Order Confirmation — Ref {reference}",
+                html_body
+            )
+
+            send_email(
+                "vicaderonkedada@gmail.com",
+                f"New Order Received — Ref {reference}",
+                html_body
+            )
+
+        except Exception as e:
+            print("Email sending failed:", str(e))
+
+        # ---------------- Store Order ----------------
         orders.append({
             "customer": customer,
             "cart": cart,
@@ -178,7 +209,7 @@ def webhook():
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
 
-        print("Order received, seller WhatsApp link:", seller_link)
+        print("✅ Order processed:", reference)
 
     return jsonify({"status": "ok"}), 200
 
