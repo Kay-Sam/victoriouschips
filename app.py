@@ -262,32 +262,64 @@ def admin_dashboard():
 def payment_success(reference, phone):
     # Verify transaction with Paystack
     headers = {"Authorization": f"Bearer {PAYSTACK_SECRET}"}
-    res = requests.get(f"https://api.paystack.co/transaction/verify/{reference}", headers=headers)
-    
+    res = requests.get(
+        f"https://api.paystack.co/transaction/verify/{reference}",
+        headers=headers
+    )
+
     if res.status_code != 200:
-        abort(404)  # Can't reach Paystack, show 404
-    
-    data = res.json()
-    if not data.get("status") or data["data"]["status"] != "success":
-        abort(404)  # Payment not successful, show 404
-    
-    # Pull metadata (cart, customer info, etc.)
-    metadata = data["data"].get("metadata", {})
+        abort(404)
+
+    response = res.json()
+
+    if not response.get("status") or response["data"]["status"] != "success":
+        abort(404)
+
+    data = response["data"]
+
+    # Pull metadata
+    metadata = data.get("metadata", {})
     customer = metadata.get("customer", {})
     cart = metadata.get("cart", [])
 
-    # Recreate WhatsApp link with full order info
-    items_text = "\n".join(f"{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}" for item in cart)
+    # Normalize cart safely (convert strings to integers)
+    items_list = []
+    total_amount = 0
+
+    for item in cart:
+        name = item.get("name", "Item")
+        price = int(item.get("price", 0))
+        quantity = int(item.get("quantity", 1))
+
+        subtotal = price * quantity
+        total_amount += subtotal
+
+        items_list.append(f"{name} × {quantity} — ₦{subtotal:,}")
+
+    items_text = "\n".join(items_list)
+
+    # Use Paystack amount as final source of truth
+    total_paid = f"₦{data['amount'] / 100:,.2f}"
+
     wa_message = (
         f"🛒 Payment received!\n\n"
         f"Name: {customer.get('name', 'N/A')}\n"
         f"Phone: {customer.get('phone', 'N/A')}\n"
-        f"Reference: {reference}\n"
-        f"Items:\n{items_text}"
+        f"Reference: {reference}\n\n"
+        f"Items:\n{items_text}\n\n"
+        f"Total Paid: {total_paid}"
     )
+
     wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={quote_plus(wa_message)}"
 
-    return render_template("payment-success.html", wa_link=wa_link, reference=reference)
+    return render_template(
+        "payment-success.html",
+        wa_link=wa_link,
+        reference=reference,
+        total_paid=total_paid,
+        cart=cart,
+        customer=customer
+    )
 
 
 
