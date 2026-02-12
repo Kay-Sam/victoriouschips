@@ -23,7 +23,7 @@ ADMIN_KEY = os.getenv("ADMIN_KEY", "supersecret")
 # ---------------- SMTP CONFIG ----------------
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_FROM = "Victorious Chips <admin@victoriouschips.com.ng>"
+SMTP_FROM = "Victorious Chips <vicaderonkedada@gmail.com>"
 SMTP_USERNAME = os.getenv("SMTP_USERNAME")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
@@ -252,11 +252,44 @@ def admin_dashboard():
     return render_template("admin.html", order=order, error=error)
 
 # ---------------- PAYMENT SUCCESS ----------------
+# @app.route("/payment-success/<reference>/<phone>")
+# def payment_success(reference, phone):
+#     message = quote_plus(f"Hello, I just completed payment.\nReference: {reference}\nPhone: {phone}")
+#     wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={message}"
+#     return render_template("payment-success.html", wa_link=wa_link , reference=reference)
+
 @app.route("/payment-success/<reference>/<phone>")
 def payment_success(reference, phone):
-    message = quote_plus(f"Hello, I just completed payment.\nReference: {reference}\nPhone: {phone}")
-    wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={message}"
-    return render_template("payment-success.html", wa_link=wa_link , reference=reference)
+    # Verify transaction with Paystack
+    headers = {"Authorization": f"Bearer {PAYSTACK_SECRET}"}
+    res = requests.get(f"https://api.paystack.co/transaction/verify/{reference}", headers=headers)
+    
+    if res.status_code != 200:
+        abort(404)  # Can't reach Paystack, show 404
+    
+    data = res.json()
+    if not data.get("status") or data["data"]["status"] != "success":
+        abort(404)  # Payment not successful, show 404
+    
+    # Pull metadata (cart, customer info, etc.)
+    metadata = data["data"].get("metadata", {})
+    customer = metadata.get("customer", {})
+    cart = metadata.get("cart", [])
+
+    # Recreate WhatsApp link with full order info
+    items_text = "\n".join(f"{item['name']} × {item['quantity']} — ₦{item['price'] * item['quantity']}" for item in cart)
+    wa_message = (
+        f"🛒 Payment received!\n\n"
+        f"Name: {customer.get('name', 'N/A')}\n"
+        f"Phone: {customer.get('phone', 'N/A')}\n"
+        f"Reference: {reference}\n"
+        f"Items:\n{items_text}"
+    )
+    wa_link = f"https://wa.me/{SELLER_WHATSAPP}?text={quote_plus(wa_message)}"
+
+    return render_template("payment-success.html", wa_link=wa_link, reference=reference)
+
+
 
 @app.route("/my-orders", methods=["GET", "POST"])
 def my_orders():
@@ -317,6 +350,15 @@ def my_orders():
 @app.route("/health")
 def health():
     return "OK", 200
+
+@app.route("/test-email")
+def test_email():
+    try:
+        send_email("vicaderonkedada@gmail.com", "Test Email", "<h1>Hello World!</h1>")
+        return "Email sent!"
+    except Exception as e:
+        return f"Error: {e}"
+
 
 if __name__ == "__main__":
     app.run(debug=True)
