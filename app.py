@@ -33,12 +33,17 @@ resend.api_key = os.getenv("RESEND_API_KEY")
 
 # ---------------- HELPER FUNCTION ----------------
 def send_email(to_email, subject, html_body):
-    resend.Emails.send({
-        "from": "Victorious Chips <orders@victoriouschips.com.ng>",
-        "to": [to_email],
-        "subject": subject,
-        "html": html_body,
-    })
+    try:
+        response = resend.Emails.send({
+            "from": "Victorious Chips <orders@victoriouschips.com.ng>",
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body,
+        })
+        print("Resend response:", response)
+    except Exception as e:
+        print("Resend ERROR:", str(e))
+        raise
 
 # ---------------- ORDERS ----------------
 orders = []  # Store latest orders in memory
@@ -336,7 +341,7 @@ def payment_success(reference, phone):
     total_paid = f"₦{data['amount'] / 100:,.2f}"
 
     wa_message = (
-        f"🛒 Payment received!\n\n"
+        f"🛒 I just made an order!\n\n"
         f"Name: {customer.get('name', 'N/A')}\n"
         f"Phone: {customer.get('phone', 'N/A')}\n"
         f"Reference: {reference}\n\n"
