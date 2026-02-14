@@ -111,114 +111,281 @@ def create_payment():
         "promo": promo
     })
 
+
 # ---------------- WEBHOOK SECURITY ----------------
 def verify_paystack_signature(req):
+
     signature = req.headers.get("x-paystack-signature")
     body = req.data
-    computed = hmac.new(PAYSTACK_SECRET.encode(), body, hashlib.sha512).hexdigest()
+
+    computed = hmac.new(
+        PAYSTACK_SECRET.encode(),
+        body,
+        hashlib.sha512
+    ).hexdigest()
+
     return hmac.compare_digest(computed, signature)
+
 
 # ---------------- SELLER & BUYER WEBHOOK ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
+
+    # Verify Paystack request is authentic
     if not verify_paystack_signature(request):
         return jsonify({"error": "Invalid signature"}), 400
 
     event = request.json
 
     if event.get("event") == "charge.success":
+
         data = event["data"]
         reference = data.get("reference")
 
-        # 🔒 Prevent duplicate processing
+        # Prevent duplicate processing
         if any(order["reference"] == reference for order in orders):
             return jsonify({"status": "already_processed"}), 200
 
+
+        # ---------------- PAYMENT TIME ----------------
+        paid_at_utc = data.get("paid_at")
+
+        if paid_at_utc:
+
+            paid_dt = datetime.strptime(
+                paid_at_utc,
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+
+            paid_dt = paid_dt.replace(
+                tzinfo=timezone.utc
+            ).astimezone(
+                timezone(timedelta(hours=1))
+            )
+
+            paid_time = paid_dt.strftime(
+                "%d %B %Y, %I:%M %p"
+            )
+
+        else:
+            paid_time = "N/A"
+
+
+        # ---------------- METADATA ----------------
         metadata = data.get("metadata", {})
         customer = metadata.get("customer", {})
         cart = metadata.get("cart", [])
         promo = metadata.get("promo")
 
-        # ✅ Use Paystack verified amount
-        total_paid = f"₦{data['amount'] / 100:,.2f}"
 
-        # ---------------- Normalize Cart Safely ----------------
+        # ---------------- CALCULATE EXPECTED TOTAL ----------------
+        expected_total = sum(
+            int(item.get("price", 0)) *
+            int(item.get("quantity", 1))
+            for item in cart
+        )
+
+
+        # ---------------- ACTUAL PAID AMOUNT ----------------
+        total_paid_naira = data["amount"] / 100
+
+        total_paid = f"₦{total_paid_naira:,.2f}"
+
+
+        # ---------------- DETECT OVERPAYMENT ----------------
+        overpay_amount = (
+
+            total_paid_naira - expected_total
+
+            if total_paid_naira > expected_total
+
+            else 0
+
+        )
+
+        overpay_text = (
+
+            f" (Overpaid ₦{overpay_amount:,.2f})"
+
+            if overpay_amount > 0
+
+            else ""
+
+        )
+
+
+        # ---------------- FORMAT ITEMS ----------------
         items_list = []
         items_html_list = []
 
         for item in cart:
+
             name = item.get("name", "Item")
+
             price = int(item.get("price", 0))
+
             quantity = int(item.get("quantity", 1))
 
             subtotal = price * quantity
 
-            items_list.append(f"{name} × {quantity} — ₦{subtotal:,}")
-            items_html_list.append(f"<li>{name} × {quantity} — ₦{subtotal:,}</li>")
+            items_list.append(
+                f"{name} × {quantity} — ₦{subtotal:,}"
+            )
+
+            items_html_list.append(
+                f"<li>{name} × {quantity} — ₦{subtotal:,}</li>"
+            )
 
         items_text = "\n".join(items_list)
+
         items_html = "".join(items_html_list)
 
-        # ---------------- WhatsApp Message ----------------
+
+        # ---------------- WHATSAPP MESSAGE ----------------
         wa_message = (
+
             f"🛒 *New Order Received*\n\n"
+
             f"*Name:* {customer.get('name', 'N/A')}\n"
+
             f"*Phone:* {customer.get('phone', 'N/A')}\n"
+
             f"*Email:* {customer.get('email', 'N/A')}\n"
+
             f"*Address:* {customer.get('address', 'N/A')}\n"
-            f"*Promo:* {promo or 'None'}\n"
+
+            f"*Promo:* {promo or 'None'}\n\n"
+
             f"*Items:*\n{items_text}\n\n"
-            f"*Total Paid:* {total_paid}\n"
+
+            f"*Expected:* ₦{expected_total:,.2f}\n"
+
+            f"*Paid:* {total_paid}{overpay_text}\n"
+
+            f"*Payment Time:* {paid_time}\n"
+
             f"*Reference:* {reference}"
+
         )
 
-        seller_link = f"https://wa.me/{SELLER_WHATSAPP}?text={quote_plus(wa_message)}"
 
-        # ---------------- Email Body ----------------
+        seller_link = (
+
+            f"https://wa.me/{SELLER_WHATSAPP}"
+
+            f"?text={quote_plus(wa_message)}"
+
+        )
+
+
+        # ---------------- EMAIL BODY ----------------
         html_body = f"""
+
         <h2>Order Confirmation</h2>
+
         <p><strong>Name:</strong> {customer.get('name', 'N/A')}</p>
+
         <p><strong>Phone:</strong> {customer.get('phone', 'N/A')}</p>
+
         <p><strong>Email:</strong> {customer.get('email', 'N/A')}</p>
+
         <p><strong>Address:</strong> {customer.get('address', 'N/A')}</p>
-        <p><strong>Promo:</strong> {promo or 'None'}</p>
+
         <p><strong>Reference:</strong> {reference}</p>
+
+        <p><strong>Payment Time:</strong> {paid_time}</p>
+
         <ul>{items_html}</ul>
-        <p><strong>Total Paid:</strong> {total_paid}</p>
+
+        <p><strong>Expected Total:</strong> ₦{expected_total:,.2f}</p>
+
+        <p><strong>Total Paid:</strong> {total_paid}{overpay_text}</p>
+
         """
 
-        # ---------------- Send Emails ----------------
+
+        # ---------------- SEND EMAILS ----------------
         try:
+
+            # Customer email
             send_email(
+
                 customer.get("email"),
+
                 f"Your Order Confirmation — Ref {reference}",
+
                 html_body
+
             )
 
+
+            # Admin email
             send_email(
+
                 "vicaderonkedada@gmail.com",
+
                 f"New Order Received — Ref {reference}",
+
                 html_body
+
             )
+
+
+            print("✅ Emails sent successfully")
+
 
         except Exception as e:
-            print("Email sending failed:", str(e))
 
-        # ---------------- Store Order ----------------
+            print("❌ Email sending failed:", str(e))
+
+
+        # ---------------- STORE ORDER ----------------
         NIGERIA_TZ = timezone(timedelta(hours=1))
+
         orders.append({
+
             "customer": customer,
+
             "cart": cart,
+
             "promo": promo,
-            "total": total_paid,
+
+            "expected_total": expected_total,
+
+            "total_paid": total_paid_naira,
+
+            "overpay": overpay_amount,
+
+            "paid_time": paid_time,
+
             "reference": reference,
+
             "wa_link": seller_link,
-            "timestamp": datetime.now(NIGERIA_TZ).strftime("%d-%Y-%m- %H:%M:%S")
+
+            "timestamp": datetime.now(
+
+                NIGERIA_TZ
+
+            ).strftime("%d-%m-%Y %H:%M:%S")
+
         })
 
-        print("✅ Order processed:", reference)
+
+        print(
+
+            f"✅ Order processed: {reference} | "
+
+            f"Paid: ₦{total_paid_naira:,.2f} | "
+
+            f"Overpay: ₦{overpay_amount:,.2f} | "
+
+            f"Time: {paid_time}"
+
+        )
+
 
     return jsonify({"status": "ok"}), 200
+
 
 # ---------------- ADMIN DASHBOARD ----------------
 @app.route("/admin", methods=["GET", "POST"])
