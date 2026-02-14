@@ -295,6 +295,7 @@ def webhook():
 
         <p><strong>Payment Time:</strong> {paid_time}</p>
 
+        <p><strong>Cart Items:</strong></p>
         <ul>{items_html}</ul>
 
         <p><strong>Expected Total:</strong> ₦{expected_total:,.2f}</p>
